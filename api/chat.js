@@ -1,164 +1,95 @@
-/* ============================================================================
-   /api/chat.js — Vercel Serverless Function
-   ----------------------------------------------------------------------------
-   Yeh function aapki API key ko 100% server-side rakhta hai. Frontend (GitHub
-   Pages) sirf user ka message yahan bhejta hai; yeh function khud DeepSeek ya
-   OpenAI ko call karta hai using a secret environment variable, aur sirf
-   AI ka reply wapas frontend ko bhejta hai.
-
-   Deployment steps neeche di gayi instructions mein hain.
-   ============================================================================ */
-
-// -----------------------------------------------------------------------------
-// 1. CONFIG — apni settings yahan adjust karein
-// -----------------------------------------------------------------------------
-
-// Apni GitHub Pages domain yahan daalein (https:// ke saath, trailing slash NAHI).
-// Yeh CORS ko restrict karta hai taake sirf aapki site is API ko call kar sake.
-const ALLOWED_ORIGIN = "https://your-github-username.github.io";
-
-// Provider switch — environment variable se control hota hai (Vercel dashboard
-// mein set karein). Default "deepseek" hai agar set na ho.
-const PROVIDER = (process.env.AI_PROVIDER || "deepseek").toLowerCase();
-
-const PROVIDER_CONFIG = {
-  deepseek: {
-    url: "https://api.deepseek.com/chat/completions",
-    model: "deepseek-chat",
-    apiKey: process.env.DEEPSEEK_API_KEY,
-  },
-  openai: {
-    url: "https://api.openai.com/v1/chat/completions",
-    model: "gpt-4o-mini",
-    apiKey: process.env.OPENAI_API_KEY,
-  },
-};
-
-// System prompt server-side rakha gaya hai — frontend isay override nahi kar
-// sakta, chahe DevTools se request tamper bhi ki jaye.
+// Server-side system prompt for Muhammad Shayan's Portfolio Chatbot
 const SYSTEM_PROMPT = `
 You are the official AI assistant on the portfolio website of Muhammad Shayan.
-You answer on his behalf, representing him professionally, e.g. "Shayan
-specializes in..." or "He can help you with...".
+Your role is to represent him professionally and guide potential clients or visitors.
 
 About Muhammad Shayan:
 - Title: AI-Assisted Web Developer & Digital Marketing Specialist
-- Founder of The Readyfy
-- Based in Karachi, Pakistan
-- Email: shayankamran7@gmail.com
-- Phone: 0313-1009616
+- Founder of "The Readyfy", a digital marketing and web development agency focusing on high-end UI/UX, premium Shopify stores, and e-commerce scaling.
+- Based in: Karachi, Pakistan.
+- Contact Number: 0313-1009616
+- Email Address: shayankamran7@gmail.com
 
-Skills:
-- AI & Development: AI-Assisted Web Development, Shopify Customization, Store Optimization
-- Marketing & Strategy: Meta Ads, Digital Marketing, Conversion Rate Optimization (CRO)
-- Data & Automation: Automated Data Scraping, Database Management, Workflow Automation
+Key Skills & Professional Focus:
+- Custom Shopify Development: Building luxury, conversion-optimized e-commerce stores with premium layouts.
+- Digital Marketing & Strategy: Scaling e-commerce brands, managing Meta Ads campaigns, and implementing Conversion Rate Optimization (CRO).
+- Data & Automation: Professional B2B lead generation, automated data scraping workflows, database management, and business lead operations.
 
 Experience:
-- Manager at The Readyfy — operations, project timelines, client delivery, e-commerce infrastructure
-- Data Scraper Agent at Urban Grid Solution — automated scraping workflows, data cleaning, pipeline maintenance
-- E-Commerce Assistant — Shopify management, product listings, Meta Ad campaigns
+- Operations Manager at The Readyfy, managing end-to-end client delivery and e-commerce infrastructure.
+- Data Scraper Agent at Urban Grid Solution, handling automated data flows and pipeline maintenance.
+- Successfully built high-end portfolios including projects like "PureLuna Store", "MAISON-CLAT", and "LUXE-LOCKS".
 
-Featured projects:
-- PureLuna Store — Premium E-Commerce UX/UI
-- MAISON-CLAT — Luxury Shopify Setup
-- LUXE-LOCKS — Conversion-Optimized Brand Store
+Chat Guidelines:
+1. Speak exclusively in professional, warm, and clear English.
+2. Keep your answers brief and highly impactful (2-3 sentences maximum per reply).
+3. If asked about exact pricing or availability, state that it depends on the project scope and politely guide them to contact Shayan directly.
+4. Always close or gently push the user toward booking a meeting, sending an email, or reaching out via WhatsApp.
+`;
 
-Guidelines:
-- Be warm, professional, and concise (2-4 sentences per reply unless asked for detail).
-- If asked about pricing or exact availability, say it depends on project scope and
-  encourage the visitor to share their requirements via the contact form or email/phone.
-- If you don't know something specific, be honest and suggest they contact Shayan
-  directly at shayankamran7@gmail.com.
-- Reply in English, Urdu, or Roman Urdu — match the visitor's language.
-- Never invent fake testimonials, fake stats, or commitments Shayan hasn't made.
-`.trim();
-
-// -----------------------------------------------------------------------------
-// 2. HANDLER
-// -----------------------------------------------------------------------------
 module.exports = async function handler(req, res) {
-  // --- CORS headers (every response needs these, including errors) ---
-  res.setHeader("Access-Control-Allow-Origin", ALLOWED_ORIGIN);
-  res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
-  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+    // Handle CORS preflight request
+    res.setHeader('Access-Control-Allow-Credentials', true);
+    res.setHeader('Access-Control-Allow-Origin', '*'); // Adjust this to your specific domain if you want to restrict access
+    res.setHeader('Access-Control-Allow-Methods', 'GET,OPTIONS,PATCH,DELETE,POST,PUT');
+    res.setHeader('Access-Control-Allow-Headers', 'X-CSRF-Token, X-Requested-With, Accept, Accept-Version, Content-Length, Content-MD5, Content-Type, Date, X-Api-Version');
 
-  // Preflight request — browser pehle yeh bhejta hai POST se pehle
-  if (req.method === "OPTIONS") {
-    return res.status(200).end();
-  }
-
-  if (req.method !== "POST") {
-    return res.status(405).json({ error: "Method not allowed. Use POST." });
-  }
-
-  try {
-    const { messages } = req.body || {};
-
-    if (!messages || !Array.isArray(messages) || messages.length === 0) {
-      return res.status(400).json({ error: "`messages` array is required." });
+    if (req.method === 'OPTIONS') {
+        res.status(200).end();
+        return;
     }
 
-    // Safety: sirf user/assistant messages frontend se accept karein —
-    // koi bhi "system" role jo client ne bhejne ki koshish ki ho, drop kar dein.
-    // Phir apna trusted system prompt khud prepend karein.
-    const cleanHistory = messages
-      .filter((m) => m && (m.role === "user" || m.role === "assistant"))
-      .filter((m) => typeof m.content === "string" && m.content.trim().length > 0)
-      .slice(-20); // sirf last 20 messages rakhein — token cost aur abuse dono control hota hai
-
-    if (cleanHistory.length === 0) {
-      return res.status(400).json({ error: "No valid messages found." });
+    if (req.method !== 'POST') {
+        return res.status(405).json({ error: 'Method not allowed' });
     }
 
-    // Basic length guard per message (avoid huge payload abuse)
-    for (const m of cleanHistory) {
-      if (m.content.length > 2000) {
-        return res.status(400).json({ error: "Message too long." });
-      }
+    try {
+        const { messages } = req.body;
+        if (!messages || !Array.isArray(messages)) {
+            return res.status(400).json({ error: 'Invalid or missing messages array' });
+        }
+
+        // Use DeepSeek Key or fallback to OpenAI Key from environment variables
+        const apiKey = process.env.DEEPSEEK_API_KEY || process.env.OPENAI_API_KEY;
+        if (!apiKey) {
+            return res.status(500).json({ error: 'API key is missing in Vercel Environment Variables.' });
+        }
+
+        // Setup clean message history and injection of System Prompt
+        const cleanHistory = messages.filter(m => m.role === 'user' || m.role === 'assistant').slice(-15);
+        const finalMessages = [{ role: "system", content: SYSTEM_PROMPT }, ...cleanHistory];
+
+        // Determine API Endpoint (Defaults to DeepSeek chat completions)
+        const url = process.env.DEEPSEEK_API_KEY 
+            ? 'https://api.deepseek.com/v1/chat/completions' 
+            : 'https://api.openai.com/v1/chat/completions';
+
+        const modelName = process.env.DEEPSEEK_API_KEY ? 'deepseek-chat' : 'gpt-4o-mini';
+
+        // Direct fetch call
+        const aiRes = await fetch(url, {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json",
+                "Authorization": `Bearer ${apiKey}`
+            },
+            body: JSON.stringify({
+                model: modelName,
+                messages: finalMessages,
+                temperature: 0.6,
+                max_tokens: 300
+            })
+        });
+
+        if (!aiRes.ok) {
+            const errData = await aiRes.text();
+            return res.status(aiRes.status).json({ error: `AI Provider Error: ${errData}` });
+        }
+
+        const data = await aiRes.json();
+        return res.status(200).json(data);
+
+    } catch (error) {
+        return res.status(500).json({ error: error.message });
     }
-
-    const finalMessages = [{ role: "system", content: SYSTEM_PROMPT }, ...cleanHistory];
-
-    const provider = PROVIDER_CONFIG[PROVIDER];
-    if (!provider) {
-      return res.status(500).json({ error: `Unknown AI_PROVIDER: ${PROVIDER}` });
-    }
-    if (!provider.apiKey) {
-      return res.status(500).json({
-        error: `Server misconfigured: missing API key for "${PROVIDER}". Set it in Vercel Environment Variables.`,
-      });
-    }
-
-    const aiRes = await fetch(provider.url, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${provider.apiKey}`,
-      },
-      body: JSON.stringify({
-        model: provider.model,
-        messages: finalMessages,
-        temperature: 0.6,
-        max_tokens: 400,
-      }),
-    });
-
-    if (!aiRes.ok) {
-      const errText = await aiRes.text();
-      console.error(`[${PROVIDER}] upstream error:`, aiRes.status, errText);
-      return res.status(502).json({ error: "Upstream AI service error. Try again shortly." });
-    }
-
-    const data = await aiRes.json();
-    const reply = data?.choices?.[0]?.message?.content;
-
-    if (!reply) {
-      return res.status(502).json({ error: "AI service returned no reply." });
-    }
-
-    return res.status(200).json({ reply });
-  } catch (err) {
-    console.error("Handler error:", err);
-    return res.status(500).json({ error: "Internal server error." });
-  }
 };
