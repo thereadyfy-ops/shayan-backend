@@ -1,9 +1,0 @@
-{
-  "name": "shayan-chat-backend",
-  "version": "1.0.0",
-  "description": "Backend proxy for AI chatbot",
-  "main": "api/chat.js",
-  "dependencies": {
-    "node-fetch": "^2.7.0"
-  }
-}
