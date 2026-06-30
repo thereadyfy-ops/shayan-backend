@@ -1,4 +1,3 @@
-// Server-side system prompt for Muhammad Shayan's Portfolio Chatbot
 const SYSTEM_PROMPT = `
 You are the official AI assistant on the portfolio website of Muhammad Shayan.
 Your role is to represent him professionally and guide potential clients or visitors.
@@ -28,15 +27,15 @@ Chat Guidelines:
 `;
 
 module.exports = async function handler(req, res) {
-    // Handle CORS preflight request
-    res.setHeader('Access-Control-Allow-Credentials', true);
-    res.setHeader('Access-Control-Allow-Origin', '*'); // Adjust this to your specific domain if you want to restrict access
+    // Explicit CORS headers for all incoming requests
+    res.setHeader('Access-Control-Allow-Credentials', 'true');
+    res.setHeader('Access-Control-Allow-Origin', '*'); 
     res.setHeader('Access-Control-Allow-Methods', 'GET,OPTIONS,PATCH,DELETE,POST,PUT');
-    res.setHeader('Access-Control-Allow-Headers', 'X-CSRF-Token, X-Requested-With, Accept, Accept-Version, Content-Length, Content-MD5, Content-Type, Date, X-Api-Version');
+    res.setHeader('Access-Control-Allow-Headers', 'X-CSRF-Token, X-Requested-With, Accept, Accept-Version, Content-Length, Content-MD5, Content-Type, Date, X-Api-Version, Authorization');
 
+    // Handle OPTIONS preflight immediately before processing body
     if (req.method === 'OPTIONS') {
-        res.status(200).end();
-        return;
+        return res.status(200).end();
     }
 
     if (req.method !== 'POST') {
@@ -49,24 +48,20 @@ module.exports = async function handler(req, res) {
             return res.status(400).json({ error: 'Invalid or missing messages array' });
         }
 
-        // Use DeepSeek Key or fallback to OpenAI Key from environment variables
         const apiKey = process.env.DEEPSEEK_API_KEY || process.env.OPENAI_API_KEY;
         if (!apiKey) {
             return res.status(500).json({ error: 'API key is missing in Vercel Environment Variables.' });
         }
 
-        // Setup clean message history and injection of System Prompt
         const cleanHistory = messages.filter(m => m.role === 'user' || m.role === 'assistant').slice(-15);
         const finalMessages = [{ role: "system", content: SYSTEM_PROMPT }, ...cleanHistory];
 
-        // Determine API Endpoint (Defaults to DeepSeek chat completions)
         const url = process.env.DEEPSEEK_API_KEY 
             ? 'https://api.deepseek.com/v1/chat/completions' 
             : 'https://api.openai.com/v1/chat/completions';
 
         const modelName = process.env.DEEPSEEK_API_KEY ? 'deepseek-chat' : 'gpt-4o-mini';
 
-        // Direct fetch call
         const aiRes = await fetch(url, {
             method: "POST",
             headers: {
