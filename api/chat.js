@@ -1,3 +1,5 @@
+const https = require('https');
+
 const SYSTEM_PROMPT = `
 You are the official AI assistant on the portfolio website of Muhammad Shayan.
 Your role is to represent him professionally and guide potential clients or visitors.
@@ -8,7 +10,6 @@ About Muhammad Shayan:
 - Based in: Karachi, Pakistan.
 - Contact Number: 0313-1009616
 - Email Address: shayankamran7@gmail.com
-
 
 Key Skills & Professional Focus:
 - Custom Shopify Development: Building luxury, conversion-optimized e-commerce stores with premium layouts.
@@ -30,11 +31,11 @@ Chat Guidelines:
 module.exports = async function handler(req, res) {
     // Explicit CORS headers for all incoming requests
     res.setHeader('Access-Control-Allow-Credentials', 'true');
-    res.setHeader('Access-Control-Allow-Origin', '*'); 
+    res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Methods', 'GET,OPTIONS,PATCH,DELETE,POST,PUT');
     res.setHeader('Access-Control-Allow-Headers', 'X-CSRF-Token, X-Requested-With, Accept, Accept-Version, Content-Length, Content-MD5, Content-Type, Date, X-Api-Version, Authorization');
 
-    // Handle OPTIONS preflight immediately before processing body
+    // Handle OPTIONS preflight immediately
     if (req.method === 'OPTIONS') {
         return res.status(200).end();
     }
@@ -49,41 +50,55 @@ module.exports = async function handler(req, res) {
             return res.status(400).json({ error: 'Invalid or missing messages array' });
         }
 
-        const apiKey = process.env.DEEPSEEK_API_KEY || process.env.OPENAI_API_KEY;
+        const apiKey = process.env.GEMINI_API_KEY;
         if (!apiKey) {
-            return res.status(500).json({ error: 'API key is missing in Vercel Environment Variables.' });
+            return res.status(500).json({ error: 'GEMINI_API_KEY is missing in Vercel Environment Variables.' });
         }
 
-        const cleanHistory = messages.filter(m => m.role === 'user' || m.role === 'assistant').slice(-15);
-        const finalMessages = [{ role: "system", content: SYSTEM_PROMPT }, ...cleanHistory];
+        // Format conversation array specifically for Google Gemini API format
+        const cleanHistory = messages.filter(m => m.role === 'user' || m.role === 'assistant' || m.role === 'model');
+        const contents = cleanHistory.slice(-12).map(m => ({
+            role: (m.role === 'assistant' || m.role === 'model') ? 'model' : 'user',
+            parts: [{ text: m.content || m.text }]
+        }));
 
-        const url = process.env.DEEPSEEK_API_KEY 
-            ? 'https://api.deepseek.com/v1/chat/completions' 
-            : 'https://api.openai.com/v1/chat/completions';
-
-        const modelName = process.env.DEEPSEEK_API_KEY ? 'deepseek-chat' : 'gpt-4o-mini';
-
-        const aiRes = await fetch(url, {
-            method: "POST",
-            headers: {
-                "Content-Type": "application/json",
-                "Authorization": `Bearer ${apiKey}`
-            },
-            body: JSON.stringify({
-                model: modelName,
-                messages: finalMessages,
-                temperature: 0.6,
-                max_tokens: 300
-            })
+        const postData = JSON.stringify({
+            contents: contents,
+            systemInstruction: { parts: [{ text: SYSTEM_PROMPT }] },
+            generationConfig: { temperature: 0.6, maxOutputTokens: 250 }
         });
 
-        if (!aiRes.ok) {
-            const errData = await aiRes.text();
-            return res.status(aiRes.status).json({ error: `AI Provider Error: ${errData}` });
+        // Use native Node.js https request to ensure absolute runtime stability
+        const options = {
+            hostname: 'generativelanguage.googleapis.com',
+            path: `/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`,
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Content-Length': Buffer.byteLength(postData)
+            }
+        };
+
+        const apiResponse = await new Promise((resolve, reject) => {
+            const reqApi = https.request(options, (resApi) => {
+                let data = '';
+                resApi.on('data', (chunk) => { data += chunk; });
+                resApi.on('end', () => resolve({ status: resApi.statusCode, body: data }));
+            });
+
+            reqApi.on('error', (e) => reject(e));
+            reqApi.write(postData);
+            reqApi.end();
+        });
+
+        if (apiResponse.status !== 200) {
+            return res.status(apiResponse.status).json({ error: `Gemini API returned error status ${apiResponse.status}: ${apiResponse.body}` });
         }
 
-        const data = await aiRes.json();
-        return res.status(200).json(data);
+        const dataJson = JSON.parse(apiResponse.body);
+        const replyText = dataJson.candidates?.[0]?.content?.parts?.[0]?.text || "Thank you for reaching out.";
+
+        return res.status(200).json({ reply: replyText });
 
     } catch (error) {
         return res.status(500).json({ error: error.message });
