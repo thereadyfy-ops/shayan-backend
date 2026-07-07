@@ -54,19 +54,31 @@ module.exports = async function handler(req, res) {
             return res.status(200).json({ reply: "Backend Config Error: GEMINI_API_KEY missing on Vercel Dashboard." });
         }
 
+        // Format conversation history safely
         const cleanHistory = messages.filter(m => m.role === 'user' || m.role === 'assistant' || m.role === 'model');
-        const contents = cleanHistory.slice(-12).map(m => ({
+        const formattedHistory = cleanHistory.slice(-10).map(m => ({
             role: (m.role === 'assistant' || m.role === 'model') ? 'model' : 'user',
             parts: [{ text: m.content || m.text || 'Hi' }]
         }));
 
+        // Inject system instructions naturally into the conversation stream to maintain context across all stable channels
+        const contents = [
+            {
+                role: 'user',
+                parts: [{ text: `System Context Instructions (Follow strictly): ${SYSTEM_PROMPT}` }]
+            },
+            {
+                role: 'model',
+                parts: [{ text: "Understood. I will act strictly as Muhammad Shayan's official AI assistant under these rules." }]
+            },
+            ...formattedHistory
+        ];
+
         const postData = JSON.stringify({
             contents: contents,
-            systemInstruction: { parts: [{ text: SYSTEM_PROMPT }] },
-            generationConfig: { temperature: 0.6, maxOutputTokens: 250 }
+            generationConfig: { temperature: 0.5, maxOutputTokens: 250 }
         });
 
-        // Fixed Stable API path string pattern
         const options = {
             hostname: 'generativelanguage.googleapis.com',
             path: `/v1/models/gemini-1.5-flash:generateContent?key=${apiKey}`,
@@ -89,7 +101,7 @@ module.exports = async function handler(req, res) {
         });
 
         if (apiResponse.status !== 200) {
-            return res.status(200).json({ reply: `Google API Error Status: ${apiResponse.status}. Details: ${apiResponse.body || 'Check key and project setup'}` });
+            return res.status(200).json({ reply: `Google API Error Status: ${apiResponse.status}. Details: ${apiResponse.body || 'Check connection structure'}` });
         }
 
         const dataJson = JSON.parse(apiResponse.body);
