@@ -29,13 +29,12 @@ Chat Guidelines:
 `;
 
 module.exports = async function handler(req, res) {
-    // Explicit CORS headers for all incoming requests
+    // Explicit CORS headers
     res.setHeader('Access-Control-Allow-Credentials', 'true');
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Methods', 'GET,OPTIONS,PATCH,DELETE,POST,PUT');
     res.setHeader('Access-Control-Allow-Headers', 'X-CSRF-Token, X-Requested-With, Accept, Accept-Version, Content-Length, Content-MD5, Content-Type, Date, X-Api-Version, Authorization');
 
-    // Handle OPTIONS preflight immediately
     if (req.method === 'OPTIONS') {
         return res.status(200).end();
     }
@@ -55,7 +54,6 @@ module.exports = async function handler(req, res) {
             return res.status(200).json({ reply: "Backend Config Error: GEMINI_API_KEY missing on Vercel Dashboard." });
         }
 
-        // Format conversation array specifically for Google Gemini API format
         const cleanHistory = messages.filter(m => m.role === 'user' || m.role === 'assistant' || m.role === 'model');
         const contents = cleanHistory.slice(-12).map(m => ({
             role: (m.role === 'assistant' || m.role === 'model') ? 'model' : 'user',
@@ -68,10 +66,10 @@ module.exports = async function handler(req, res) {
             generationConfig: { temperature: 0.6, maxOutputTokens: 250 }
         });
 
-        // Use native Node.js https request with the fixed 1.5-flash production path
+        // Fixed Stable API path string pattern
         const options = {
             hostname: 'generativelanguage.googleapis.com',
-            path: `/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`,
+            path: `/v1/models/gemini-1.5-flash:generateContent?key=${apiKey}`,
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
@@ -91,7 +89,7 @@ module.exports = async function handler(req, res) {
         });
 
         if (apiResponse.status !== 200) {
-            return res.status(200).json({ reply: `Google API Error Status: ${apiResponse.status}. Please verify API Key activation.` });
+            return res.status(200).json({ reply: `Google API Error Status: ${apiResponse.status}. Details: ${apiResponse.body || 'Check key and project setup'}` });
         }
 
         const dataJson = JSON.parse(apiResponse.body);
