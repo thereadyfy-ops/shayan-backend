@@ -1,5 +1,5 @@
 /* ============================================================================
-   /api/chat.js — Vercel Serverless Function (Google Gemini API)
+   /api/chat.js — Vercel Serverless Function (Google Gemini 1.5 Flash)
    ----------------------------------------------------------------------------
    Is version mein CORS headers har request ke liye SABSE PEHLE set hote hain
    — chahe request GET ho, POST ho, ya OPTIONS preflight ho. Yeh "preflight
@@ -14,7 +14,7 @@
 // -----------------------------------------------------------------------------
 
 // Apni GitHub Pages domain (https:// ke saath, trailing slash NAHI).
-const ALLOWED_ORIGIN = "https://thereadyfy-ops.github.io/Muhammad-Shayan/";
+const ALLOWED_ORIGIN = "https://thereadyfy-ops.github.io";
 
 const GEMINI_MODEL = "gemini-flash-latest";
 const GEMINI_URL = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`;
