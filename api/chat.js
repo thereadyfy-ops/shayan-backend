@@ -1,115 +1,137 @@
-const https = require('https');
+/* ============================================================================
+   /api/chat.js — Vercel Serverless Function (Google Gemini API)
+   ----------------------------------------------------------------------------
+   Is version mein CORS headers har request ke liye SABSE PEHLE set hote hain
+   — chahe request GET ho, POST ho, ya OPTIONS preflight ho. Yeh "preflight
+   failed" / "CORS error" issues ka sabse common fix hai: agar OPTIONS request
+   par headers set karne se pehle hi function kisi aur logic (jaise body
+   parsing) mein chala jaye ya crash ho jaye, browser preflight ko fail
+   samajh leta hai aur asal POST request kabhi bhejta hi nahi.
+   ============================================================================ */
 
-const SYSTEM_PROMPT = `
-You are the official AI assistant on the portfolio website of Muhammad Shayan.
-Your role is to represent him professionally and guide potential clients or visitors.
+// -----------------------------------------------------------------------------
+// 1. CONFIG
+// -----------------------------------------------------------------------------
 
-About Muhammad Shayan:
-- Title: AI-Assisted Web Developer & Digital Marketing Specialist
-- Founder of "The Readyfy", a digital marketing and web development agency focusing on high-end UI/UX, premium Shopify stores, and e-commerce scaling.
-- Based in: Karachi, Pakistan.
-- Contact Number: 0313-1009616
-- Email Address: shayankamran7@gmail.com
+// Apni GitHub Pages domain (https:// ke saath, trailing slash NAHI).
+const ALLOWED_ORIGIN = "https://thereadyfy-ops.github.io/Muhammad-Shayan/";
 
-Key Skills & Professional Focus:
-- Custom Shopify Development: Building luxury, conversion-optimized e-commerce stores with premium layouts.
-- Digital Marketing & Strategy: Scaling e-commerce brands, managing Meta Ads campaigns, and implementing Conversion Rate Optimization (CRO).
-- Data & Automation: Professional B2B lead generation, automated data scraping workflows, database management, and business lead operations.
+const GEMINI_MODEL = "gemini-flash-latest";
+const GEMINI_URL = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`;
 
-Experience:
-- Operations Manager at The Readyfy, managing end-to-end client delivery and e-commerce infrastructure.
-- Data Scraper Agent at Urban Grid Solution, handling automated data flows and pipeline maintenance.
-- Successfully built high-end portfolios including projects like "PureLuna Store", "MAISON-CLAT", and "LUXE-LOCKS".
+const SYSTEM_PROMPT =
+  "You are the official AI assistant on the portfolio website of Muhammad Shayan. " +
+  "Speak exclusively in professional, warm, and clear English. Keep answers highly " +
+  "impactful and brief (max 2-3 sentences). Guide users to reach out via WhatsApp " +
+  "(0313-1009616) or email (shayankamran7@gmail.com) for custom Shopify development " +
+  "or digital marketing inquiries.";
 
-Chat Guidelines:
-1. Speak exclusively in professional, warm, and clear English.
-2. Keep your answers brief and highly impactful (2-3 sentences maximum per reply).
-3. If asked about exact pricing or availability, state that it depends on the project scope and politely guide them to contact Shayan directly.
-4. Always close or gently push the user toward booking a meeting, sending an email, or reaching out via WhatsApp.
-`;
-
+// -----------------------------------------------------------------------------
+// 2. HANDLER
+// -----------------------------------------------------------------------------
 module.exports = async function handler(req, res) {
-    // Explicit CORS headers
-    res.setHeader('Access-Control-Allow-Credentials', 'true');
-    res.setHeader('Access-Control-Allow-Origin', '*');
-    res.setHeader('Access-Control-Allow-Methods', 'GET,OPTIONS,PATCH,DELETE,POST,PUT');
-    res.setHeader('Access-Control-Allow-Headers', 'X-CSRF-Token, X-Requested-With, Accept, Accept-Version, Content-Length, Content-MD5, Content-Type, Date, X-Api-Version, Authorization');
+  // ---- STEP 1: CORS headers — ALWAYS FIRST, before any other logic runs ----
+  res.setHeader("Access-Control-Allow-Origin", ALLOWED_ORIGIN);
+  res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+  res.setHeader("Access-Control-Max-Age", "86400"); // cache preflight for 24h
 
-    if (req.method === 'OPTIONS') {
-        return res.status(200).end();
+  // ---- STEP 2: Preflight — reply immediately, do nothing else ----
+  if (req.method === "OPTIONS") {
+    res.status(200).end();
+    return;
+  }
+
+  // ---- STEP 3: Only POST is allowed for the actual chat call ----
+  if (req.method !== "POST") {
+    res.status(405).json({ error: "Method not allowed. Use POST." });
+    return;
+  }
+
+  try {
+    // ---- STEP 4: Validate the API key exists ----
+    const apiKey = process.env.GEMINI_API_KEY;
+    if (!apiKey) {
+      res.status(500).json({
+        error: "Server misconfigured: GEMINI_API_KEY is missing in Vercel Environment Variables.",
+      });
+      return;
     }
 
-    if (req.method !== 'POST') {
-        return res.status(405).json({ error: 'Method not allowed' });
+    // ---- STEP 5: Validate incoming payload ----
+    const { messages } = req.body || {};
+    if (!messages || !Array.isArray(messages) || messages.length === 0) {
+      res.status(400).json({ error: "`messages` array is required." });
+      return;
     }
 
-    try {
-        const { messages } = req.body;
-        if (!messages || !Array.isArray(messages)) {
-            return res.status(400).json({ error: 'Invalid or missing messages array' });
-        }
+    // Keep only well-formed user/assistant turns, cap length & count
+    const cleanHistory = messages
+      .filter((m) => m && (m.role === "user" || m.role === "assistant"))
+      .filter((m) => typeof m.content === "string" && m.content.trim().length > 0)
+      .slice(-20)
+      .map((m) => ({
+        ...m,
+        content: m.content.length > 2000 ? m.content.slice(0, 2000) : m.content,
+      }));
 
-        const apiKey = process.env.GEMINI_API_KEY;
-        if (!apiKey) {
-            return res.status(200).json({ reply: "Backend Config Error: GEMINI_API_KEY missing on Vercel Dashboard." });
-        }
-
-        // Format conversation history safely
-        const cleanHistory = messages.filter(m => m.role === 'user' || m.role === 'assistant' || m.role === 'model');
-        const formattedHistory = cleanHistory.slice(-10).map(m => ({
-            role: (m.role === 'assistant' || m.role === 'model') ? 'model' : 'user',
-            parts: [{ text: m.content || m.text || 'Hi' }]
-        }));
-
-        // Inject system instructions naturally into the conversation stream to maintain context across all stable channels
-        const contents = [
-            {
-                role: 'user',
-                parts: [{ text: `System Context Instructions (Follow strictly): ${SYSTEM_PROMPT}` }]
-            },
-            {
-                role: 'model',
-                parts: [{ text: "Understood. I will act strictly as Muhammad Shayan's official AI assistant under these rules." }]
-            },
-            ...formattedHistory
-        ];
-
-        const postData = JSON.stringify({
-            contents: contents,
-            generationConfig: { temperature: 0.5, maxOutputTokens: 250 }
-        });
-
-        const options = {
-            hostname: 'generativelanguage.googleapis.com',
-            path: `/v1/models/gemini-1.5-flash:generateContent?key=${apiKey}`,
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-                'Content-Length': Buffer.byteLength(postData)
-            }
-        };
-
-        const apiResponse = await new Promise((resolve) => {
-            const reqApi = https.request(options, (resApi) => {
-                let data = '';
-                resApi.on('data', (chunk) => { data += chunk; });
-                resApi.on('end', () => resolve({ status: resApi.statusCode, body: data }));
-            });
-            reqApi.on('error', () => resolve({ status: 500, body: null }));
-            reqApi.write(postData);
-            reqApi.end();
-        });
-
-        if (apiResponse.status !== 200) {
-            return res.status(200).json({ reply: `Google API Error Status: ${apiResponse.status}. Details: ${apiResponse.body || 'Check connection structure'}` });
-        }
-
-        const dataJson = JSON.parse(apiResponse.body);
-        const replyText = dataJson.candidates?.[0]?.content?.parts?.[0]?.text || "Thank you for reaching out.";
-
-        return res.status(200).json({ reply: replyText });
-
-    } catch (error) {
-        return res.status(200).json({ reply: `Internal Handler Catch: ${error.message}` });
+    if (cleanHistory.length === 0) {
+      res.status(400).json({ error: "No valid messages found." });
+      return;
     }
+
+    // ---- STEP 6: Map to Gemini's required `contents` format ----
+    // Gemini only accepts role: "user" or "model" (never "assistant" or "system").
+    const contents = cleanHistory.map((m) => ({
+      role: m.role === "assistant" ? "model" : "user",
+      parts: [{ text: m.content }],
+    }));
+
+    // Gemini requires the conversation to start with a "user" turn.
+    if (contents[0].role !== "user") {
+      contents.unshift({ role: "user", parts: [{ text: "Hello" }] });
+    }
+
+    const geminiPayload = {
+      systemInstruction: {
+        role: "system",
+        parts: [{ text: SYSTEM_PROMPT }],
+      },
+      contents,
+      generationConfig: {
+        temperature: 0.6,
+        maxOutputTokens: 300,
+      },
+    };
+
+    // ---- STEP 7: Call Gemini ----
+    const aiRes = await fetch(`${GEMINI_URL}?key=${apiKey}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(geminiPayload),
+    });
+
+    if (!aiRes.ok) {
+      const errText = await aiRes.text();
+      console.error("Gemini upstream error:", aiRes.status, errText);
+      res.status(502).json({ error: "Upstream AI service error. Please try again shortly." });
+      return;
+    }
+
+    const data = await aiRes.json();
+    const reply = data?.candidates?.[0]?.content?.parts?.[0]?.text;
+
+    if (!reply) {
+      // Common cause: response blocked by safety filters
+      const blockReason = data?.promptFeedback?.blockReason;
+      console.error("Gemini returned no reply.", blockReason ? `Block reason: ${blockReason}` : data);
+      res.status(502).json({ error: "AI service returned no reply." });
+      return;
+    }
+
+    res.status(200).json({ reply: reply.trim() });
+  } catch (err) {
+    console.error("Handler error:", err);
+    res.status(500).json({ error: "Internal server error." });
+  }
 };
